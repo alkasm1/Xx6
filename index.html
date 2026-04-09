@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>ALM Multi‑QR Encoder</title>
+
+<style>
+body {
+  font-family: "Cairo", sans-serif;
+  background: #ffffff;
+  color: #222;
+  margin: 0;
+  padding: 0;
+}
+
+header {
+  background: #0BA37F;
+  color: white;
+  padding: 15px;
+  text-align: center;
+  font-size: 22px;
+  font-weight: bold;
+}
+
+.container {
+  padding: 20px;
+  max-width: 700px;
+  margin: auto;
+}
+
+button {
+  width: 100%;
+  padding: 14px;
+  margin-top: 10px;
+  background: #0BA37F;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 17px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #0a8c6c;
+}
+
+textarea, input[type="number"], input[type="file"] {
+  width: 100%;
+  padding: 12px;
+  margin-top: 10px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+.qr-box {
+  margin: 20px 0;
+  padding: 10px;
+  border: 1px dashed #aaa;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.small {
+  font-size: 13px;
+  color: #666;
+  margin-top: 5px;
+  text-align: center;
+}
+</style>
+
+<!-- QRCode -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+<!-- LZ-String -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
+
+<!-- PDF.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+
+<!-- Html5Qrcode -->
+<script src="https://unpkg.com/html5-qrcode"></script>
+
+</head>
+
+<body>
+
+<header>ALM Multi‑QR Encoder</header>
+
+<div class="container">
+
+<h3>إدخال نص أو كتاب</h3>
+
+<textarea id="inputText" rows="5" placeholder="اكتب نصًا هنا (للنصوص القصيرة فقط)..."></textarea>
+
+<label>أو حمّل كتاب PDF:</label>
+<input type="file" id="pdfInput" accept="application/pdf">
+
+<label>مفتاح المستخدم:</label>
+<input id="userKey" type="number" value="123456789">
+
+<button onclick="startEncoding()">تحويل إلى باركودات متعددة</button>
+
+<div id="qrList"></div>
+
+<hr>
+
+<h3>فكّ الباركودات</h3>
+
+<label>اختر صورة أو عدة صور QR:</label>
+<input type="file" id="qrFiles" accept="image/*" multiple>
+
+<button onclick="decodeSingleQR()">استخراج نص من صورة واحدة</button>
+<button onclick="decodeMultipleQR()">فكّ جميع الباركودات ودمجها</button>
+
+<h4>النص النهائي / النص المستخرج:</h4>
+<div id="finalOutput" style="padding:10px; white-space:pre-wrap; border:1px solid #ccc; border-radius:8px; min-height:80px;"></div>
+
+<!-- قارئ Html5Qrcode لصورة واحدة -->
+<div id="singleReader" style="display:none;"></div>
+
+</div>
+
+<script>
+/* ============================================================
+   نواة ALM — نفس المحرك القوي
+============================================================ */
+const B = 32;
+const LMAX = 12;
+const f0 = 100000n;
+const df = 1n;
+
+const indexToChar = {
+  0:"",1:"ا",2:"ب",3:"ت",4:"ث",5:"ج",6:"ح",7:"خ",
+  8:"د",9:"ذ",10:"ر",11:"ز",12:"س",13:"ش",14:"ص",
+  15:"ض",16:"ط",17:"ظ",18:"ع",19:"غ",20:"ف",21:"ق",
+  22:"ك",23:"ل",24:"م",25:"ن",26:"ه",27:"و",28:"ي",
+  29:"ء"
+};
+
+const charToIndex = {};
+for (const [i,ch] of Object.entries(indexToChar)) {
+  if (ch) charToIndex[ch] = parseInt(i, 10);
+}
+
+function normalizeArabic(s) {
+  return (s || "")
+    .replace(/[إأآ]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/ؤ/g, "و")
+    .replace(/ئ/g, "ي")
+    .replace(/ة/g, "ه")
+    .replace(/[^ءاأإآبتثجحخدذرزسشصضطظعغفقكلمنهوي\s]/g, "");
+}
+
+function bigIntToBase36(n) { return n.toString(36); }
+
+function base36ToBigInt(str) {
+  let res = 0n;
+  for (let i = 0; i < str.length; i++) {
+    const v = BigInt(parseInt(str[i], 36));
+    res = res * 36n + v;
+  }
+  return res;
+}
+
+function splitWord(word) {
+  const blocks = [];
+  for (let i = 0; i < word.length; i += LMAX) {
+    blocks.push(word.slice(i, i + LMAX));
+  }
+  return blocks;
+}
+
+function wordToCode(word){
+  const c = new Array(LMAX).fill(0);
+  let pos = 0;
+
+  for (let i = word.length - 1; i >= 0; i--){
+    const idx = charToIndex[word[i]];
+    if (idx === undefined) continue;
+    c[pos++] = idx;
+  }
+
+  let C = 0n;
+  for (let i = 0; i < LMAX; i++){
+    C += BigInt(c[i]) * (BigInt(B) ** BigInt(i));
+  }
+  return C;
+}
+
+function codeToWord(Cbig){
+  let C = BigInt(Cbig);
+  const digits = [];
+
+  for (let i = 0; i < LMAX; i++){
+    digits.push(Number(C % BigInt(B)));
+    C /= BigInt(B);
+  }
+
+  let w = "";
+  for (let i = LMAX - 1; i >= 0; i--){
+    w += indexToChar[digits[i]] || "";
+  }
+  return w;
+}
+
+/* ============================================================
+   استخراج نص PDF
+============================================================ */
+async function extractPDFText(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+  let fullText = "";
+
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const strings = content.items.map(item => item.str).join(" ");
+    fullText += strings + " ";
+  }
+
+  return normalizeArabic(fullText);
+}
+
+/* ============================================================
+   التقسيم الذكي
+============================================================ */
+function smartSplit(text) {
+  const words = text.split(/\s+/);
+  const chunks = [];
+  let current = [];
+
+  for (let w of words) {
+    current.push(w);
+    if (current.length >= 250) {
+      chunks.push(current.join(" "));
+      current = [];
+    }
+  }
+
+  if (current.length > 0) chunks.push(current.join(" "));
+  return chunks;
+}
+
+/* ============================================================
+   الترميز إلى عدة باركودات
+============================================================ */
+async function startEncoding() {
+  const key = BigInt(document.getElementById("userKey").value || "0");
+
+  let text = document.getElementById("inputText").value.trim();
+
+  const pdfFile = document.getElementById("pdfInput").files[0];
+  if (pdfFile) {
+    text = await extractPDFText(pdfFile);
+  }
+
+  if (!text) {
+    alert("لا يوجد نص.");
+    return;
+  }
+
+  const chunks = smartSplit(text);
+  const total = chunks.length;
+
+  document.getElementById("qrList").innerHTML = "";
+
+  for (let i = 0; i < total; i++) {
+    const encoded = encodeChunk(chunks[i], key);
+    const header = `part=${i+1}/${total}|`;
+    const compressed = LZString.compressToEncodedURIComponent(header + encoded);
+
+    const box = document.createElement("div");
+    box.className = "qr-box";
+    box.innerHTML = `<h4>الجزء ${i+1} من ${total}</h4>`;
+    const div = document.createElement("div");
+    box.appendChild(div);
+
+    new QRCode(div, {
+      text: compressed,
+      width: 240,
+      height: 240,
+      correctLevel: QRCode.CorrectLevel.M
+    });
+
+    const saveBtn = document.createElement("button");
+    saveBtn.textContent = "حفظ الباركود";
+    saveBtn.onclick = () => saveSpecificQR(div);
+    box.appendChild(saveBtn);
+
+    const shareBtn = document.createElement("button");
+    shareBtn.textContent = "مشاركة الباركود";
+    shareBtn.onclick = () => shareSpecificQR(div);
+    box.appendChild(shareBtn);
+
+    document.getElementById("qrList").appendChild(box);
+  }
+}
+
+function encodeChunk(text, key) {
+  const words = text.split(/\s+/);
+  const freqs36 = [];
+
+  words.forEach(word => {
+    const blocks = splitWord(word);
+    blocks.forEach(block => {
+      const C  = wordToCode(block);
+      const C2 = C ^ key;
+      const fFull = f0 + C2 * df;
+      freqs36.push(bigIntToBase36(fFull));
+    });
+  });
+
+  return freqs36.join(",");
+}
+
+/* ============================================================
+   حفظ ومشاركة QR
+============================================================ */
+function saveSpecificQR(qrDiv) {
+  const img = qrDiv.querySelector("img");
+  const canvas = qrDiv.querySelector("canvas");
+
+  let dataUrl = null;
+  if (img && img.src) dataUrl = img.src;
+  else if (canvas) dataUrl = canvas.toDataURL("image/png");
+
+  if (!dataUrl) return;
+
+  const a = document.createElement("a");
+  a.href = dataUrl;
+  a.download = "alm-qr.png";
+  a.click();
+}
+
+async function shareSpecificQR(qrDiv) {
+  const img = qrDiv.querySelector("img");
+  const canvas = qrDiv.querySelector("canvas");
+
+  let dataUrl = null;
+  if (img && img.src) dataUrl = img.src;
+  else if (canvas) dataUrl = canvas.toDataURL("image/png");
+
+  if (!dataUrl) return;
+
+  const res = await fetch(dataUrl);
+  const blob = await res.blob();
+  const file = new File([blob], "alm-qr.png", { type: "image/png" });
+
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    await navigator.share({
+      files: [file],
+      title: "ALM QR",
+      text: "باركود من كتاب ALM"
+    });
+  } else {
+    alert("المشاركة غير مدعومة على هذا الجهاز.");
+  }
+}
+
+/* ============================================================
+   فكّ باركود واحد فقط باستخدام Html5Qrcode
+============================================================ */
+async function decodeSingleQR() {
+  const files = document.getElementById("qrFiles").files;
+  if (!files.length) {
+    alert("اختر صورة QR أولاً.");
+    return;
+  }
+
+  const file = files[0];
+  const reader = new Html5Qrcode("singleReader");
+
+  try {
+    const result = await reader.scanFile(file, true);
+    const raw = LZString.decompressFromEncodedURIComponent(result);
+
+    const header = raw.split("|")[0];
+    const body = raw.split("|")[1];
+
+    const decoded = decodeChunk(body);
+
+    document.getElementById("finalOutput").textContent =
+      "المعلومات: " + header + "\n\n" + decoded;
+
+  } catch (e) {
+    alert("فشل في قراءة الباركود.");
+  }
+
+  reader.clear();
+}
+
+/* ============================================================
+   فكّ عدة باركودات ودمجها
+============================================================ */
+async function decodeMultipleQR() {
+  const files = document.getElementById("qrFiles").files;
+  if (!files.length) {
+    alert("اختر صور QR أولاً.");
+    return;
+  }
+
+  const parts = {};
+  let totalParts = 0;
+
+  const reader = new Html5Qrcode("singleReader");
+
+  for (let file of files) {
+    try {
+      const result = await reader.scanFile(file, true);
+      const raw = LZString.decompressFromEncodedURIComponent(result);
+
+      const header = raw.split("|")[0];
+      const body = raw.split("|")[1];
+
+      const [current, total] = header.replace("part=","").split("/");
+      totalParts = parseInt(total);
+      parts[parseInt(current)] = body;
+
+    } catch (e) {
+      continue;
+    }
+  }
+
+  reader.clear();
+
+  if (!totalParts) {
+    alert("لم يتم التعرف على أي باركود صالح.");
+    return;
+  }
+
+  let finalText = "";
+
+  for (let i = 1; i <= totalParts; i++) {
+    if (parts[i]) {
+      finalText += decodeChunk(parts[i]) + " ";
+    } else {
+      finalText += "[... جزء مفقود ...] ";
+    }
+  }
+
+  document.getElementById("finalOutput").textContent = finalText;
+}
+
+/* ============================================================
+   فكّ جزء واحد (نص مشفّر) إلى نص عربي
+============================================================ */
+function decodeChunk(raw) {
+  const key = BigInt(document.getElementById("userKey").value || "0");
+  const freqs36 = raw.split(",");
+  const words = [];
+
+  freqs36.forEach(f36 => {
+    if (!f36) return;
+    const fFull = base36ToBigInt(f36);
+    const C2 = (fFull - f0) / df;
+    const C  = C2 ^ key;
+    words.push(codeToWord(C));
+  });
+
+  return words.join(" ");
+}
+</script>
+
+</body>
+</html>
