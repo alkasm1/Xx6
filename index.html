@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<title>ALM Multi‑QR Encoder - إصدار احترافي (فك جزئي)</title>
+<title>ALM Multi‑QR Encoder - إصدار ذكي (أقل باركودات)</title>
 
 <style>
 body {
@@ -62,6 +62,7 @@ textarea, input[type="number"], input[type="file"] {
   border-radius: 12px;
   text-align: center;
   background: #fafafa;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.05);
 }
 
 .status {
@@ -81,18 +82,35 @@ textarea, input[type="number"], input[type="file"] {
   min-height: 80px;
   background: #fefefe;
 }
+
+.qr-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.qr-buttons button {
+  flex: 1;
+  margin-top: 0;
+  padding: 10px;
+  font-size: 15px;
+}
 </style>
 
+<!-- QRCode -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<!-- LZ-String -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
+<!-- PDF.js -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+<!-- Html5Qrcode -->
 <script src="https://unpkg.com/html5-qrcode"></script>
 
 </head>
 
 <body>
 
-<header>ALM Multi‑QR Encoder (فك جزئي + تقليل الأجزاء)</header>
+<header>ALM Multi‑QR Encoder (إصدار ذكي - أقل باركودات)</header>
 
 <div class="container">
 
@@ -124,7 +142,7 @@ textarea, input[type="number"], input[type="file"] {
 
 <script>
 /* ============================================================
-   نواة ALM (كما هي)
+   نواة ALM (تحويل النص العربي إلى رموز والعكس)
 ============================================================ */
 const B = 32;
 const LMAX = 12;
@@ -135,7 +153,7 @@ const indexToChar = {
   0:"",1:"ا",2:"ب",3:"ت",4:"ث",5:"ج",6:"ح",7:"خ",
   8:"د",9:"ذ",10:"ر",11:"ز",12:"س",13:"ش",14:"ص",
   15:"ض",16:"ط",17:"ظ",18:"ع",19:"غ",20:"ف",21:"ق",
-  22:"ك",23:"ل",24:"م",25:"ن",26:"ه",27:"و",28:"ي", 29:"ء"
+  22:"ك",23:"ل",24:"م",25:"ن",26:"ه",27:"و",28:"ي",29:"ء"
 };
 
 const charToIndex = {};
@@ -199,7 +217,7 @@ function codeToWord(Cbig){
 }
 
 /* ============================================================
-   تحويل جزء نصي (chunk) إلى سلسلة رموز base36 (مشفرة)
+   ترميز جزء نصي (chunk) إلى سلسلة رموز base36 مضغوطة
 ============================================================ */
 function encodeChunkToCodes(chunkText, key) {
   const words = chunkText.split(/\s+/);
@@ -216,9 +234,6 @@ function encodeChunkToCodes(chunkText, key) {
   return codes.join(",");
 }
 
-/* ============================================================
-   فك سلسلة الرموز إلى نص
-============================================================ */
 function decodeCodesToText(codesStr, key) {
   if (!codesStr) return "";
   const freqs = codesStr.split(",");
@@ -249,17 +264,15 @@ async function extractPDFText(file) {
 }
 
 /* ============================================================
-   تقسيم النص الطويل إلى أجزاء (كل جزء 3000 حرف عربي تقريباً)
-   هذا يقلل عدد الباركودات بشكل كبير
+   تقسيم النص الطويل إلى أجزاء كبيرة (مع مراعاة الكلمات الكاملة)
 ============================================================ */
 function splitTextIntoChunks(text, maxChars = 3000) {
   const chunks = [];
   let remaining = text;
   while (remaining.length > maxChars) {
     let splitPos = maxChars;
-    // نحاول القص عند مسافة
     while (splitPos > 0 && remaining[splitPos] !== ' ') splitPos--;
-    if (splitPos === 0) splitPos = maxChars; // قص قسري
+    if (splitPos === 0) splitPos = maxChars;
     chunks.push(remaining.slice(0, splitPos).trim());
     remaining = remaining.slice(splitPos).trim();
   }
@@ -268,7 +281,87 @@ function splitTextIntoChunks(text, maxChars = 3000) {
 }
 
 /* ============================================================
-   الترميز إلى عدة باركودات (كل جزء مستقل)
+   اختبار إمكانية توليد QR لحمولة معينة (مستوحى من كود الصور)
+============================================================ */
+function canGenerateQR(text) {
+  const temp = document.createElement("div");
+  try {
+    new QRCode(temp, {
+      text: text,
+      width: 1,
+      height: 1,
+      correctLevel: QRCode.CorrectLevel.L
+    });
+    return true;
+  } catch(e) {
+    return false;
+  }
+}
+
+/* ============================================================
+   توليد QR فعلي وعرضه مع أزرار الحفظ والمشاركة
+============================================================ */
+function createQRItem(payload, partNumber, totalParts) {
+  const box = document.createElement("div");
+  box.className = "qr-box";
+  box.innerHTML = `<h4>الجزء ${partNumber} من ${totalParts}</h4>`;
+  
+  const qrDiv = document.createElement("div");
+  box.appendChild(qrDiv);
+  
+  new QRCode(qrDiv, {
+    text: payload,
+    width: 240,
+    height: 240,
+    correctLevel: QRCode.CorrectLevel.L
+  });
+  
+  const btnContainer = document.createElement("div");
+  btnContainer.className = "qr-buttons";
+  
+  const saveBtn = document.createElement("button");
+  saveBtn.textContent = "💾 حفظ الباركود";
+  saveBtn.onclick = () => saveQRFromDiv(qrDiv);
+  
+  const shareBtn = document.createElement("button");
+  shareBtn.textContent = "📤 مشاركة الباركود";
+  shareBtn.onclick = () => shareQRFromDiv(qrDiv);
+  
+  btnContainer.appendChild(saveBtn);
+  btnContainer.appendChild(shareBtn);
+  box.appendChild(btnContainer);
+  
+  return box;
+}
+
+function saveQRFromDiv(qrDiv) {
+  const img = qrDiv.querySelector("img");
+  const canvas = qrDiv.querySelector("canvas");
+  let dataUrl = img?.src || canvas?.toDataURL("image/png");
+  if (!dataUrl) return;
+  const a = document.createElement("a");
+  a.href = dataUrl;
+  a.download = "alm-qr.png";
+  a.click();
+}
+
+async function shareQRFromDiv(qrDiv) {
+  const img = qrDiv.querySelector("img");
+  const canvas = qrDiv.querySelector("canvas");
+  let dataUrl = img?.src || canvas?.toDataURL("image/png");
+  if (!dataUrl) return;
+  const res = await fetch(dataUrl);
+  const blob = await res.blob();
+  const file = new File([blob], "alm-qr.png", { type: "image/png" });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    await navigator.share({ files: [file], title: "ALM QR" });
+  } else {
+    alert("المشاركة غير مدعومة.");
+  }
+}
+
+/* ============================================================
+   الوظيفة الرئيسية: تحويل النص/الكتاب إلى باركودات (ذكية)
 ============================================================ */
 async function startEncoding() {
   const key = BigInt(document.getElementById("userKey").value || "0");
@@ -286,71 +379,54 @@ async function startEncoding() {
     return;
   }
   
-  // تقسيم النص إلى أجزاء كبيرة (3000 حرف)
-  const rawChunks = splitTextIntoChunks(text, 3000);
-  const total = rawChunks.length;
+  // 1. تقسيم النص إلى أجزاء كبيرة (3000 حرف)
+  let rawChunks = splitTextIntoChunks(text, 3000);
+  let finalChunks = [];
   
-  document.getElementById("qrList").innerHTML = "";
-  document.getElementById("encodingStatus").innerHTML = `📦 تم تقسيم النص إلى ${total} جزء كبير (كل جزء ~3000 حرف)`;
-  
-  for (let i = 0; i < total; i++) {
-    // ترميز الجزء إلى رموز base36
-    const codes = encodeChunkToCodes(rawChunks[i], key);
-    // ضغط الرموز باستخدام LZString لزيادة السعة
-    const compressed = LZString.compressToEncodedURIComponent(codes);
-    const header = `part=${i+1}/${total}|`;
-    const finalData = header + compressed;
+  // 2. لكل جزء، نحاول ترميزه وضغطه واختبار صلاحية QR
+  //    إذا فشل QR بسبب طول الحمولة، نعيد تقسيم هذا الجزء إلى نصفين
+  for (let chunk of rawChunks) {
+    let success = false;
+    let currentChunk = chunk;
+    let attempts = 0;
+    const maxAttempts = 5;
     
-    const box = document.createElement("div");
-    box.className = "qr-box";
-    box.innerHTML = `<h4>الجزء ${i+1} من ${total}</h4>`;
-    const qrDiv = document.createElement("div");
-    box.appendChild(qrDiv);
+    while (!success && attempts < maxAttempts) {
+      const codes = encodeChunkToCodes(currentChunk, key);
+      const compressed = LZString.compressToEncodedURIComponent(codes);
+      // نضغط الرموز، ثم نضيف header وهمي للاختبار (بدون أرقام حقيقية)
+      const testPayload = `part=1/1|${compressed}`;
+      
+      if (testPayload.length <= 1800 && canGenerateQR(testPayload)) {
+        finalChunks.push(currentChunk);
+        success = true;
+      } else {
+        // تقليل حجم النص إلى النصف
+        const words = currentChunk.split(/\s+/);
+        if (words.length <= 1) break;
+        const halfLen = Math.floor(words.length / 2);
+        currentChunk = words.slice(0, halfLen).join(" ");
+        attempts++;
+      }
+    }
     
-    new QRCode(qrDiv, {
-      text: finalData,
-      width: 240,
-      height: 240,
-      correctLevel: QRCode.CorrectLevel.L   // أقصى سعة
-    });
-    
-    const saveBtn = document.createElement("button");
-    saveBtn.textContent = "💾 حفظ الباركود";
-    saveBtn.onclick = () => saveSpecificQR(qrDiv);
-    box.appendChild(saveBtn);
-    
-    const shareBtn = document.createElement("button");
-    shareBtn.textContent = "📤 مشاركة الباركود";
-    shareBtn.onclick = () => shareSpecificQR(qrDiv);
-    box.appendChild(shareBtn);
-    
-    document.getElementById("qrList").appendChild(box);
+    if (!success) {
+      alert(`تعذر ترميز جزء كبير من النص. حاول تقسيم النص يدويًا.`);
+      return;
+    }
   }
-}
-
-function saveSpecificQR(qrDiv) {
-  const img = qrDiv.querySelector("img");
-  const canvas = qrDiv.querySelector("canvas");
-  let dataUrl = img?.src || canvas?.toDataURL("image/png");
-  if (!dataUrl) return;
-  const a = document.createElement("a");
-  a.href = dataUrl;
-  a.download = "alm-qr.png";
-  a.click();
-}
-
-async function shareSpecificQR(qrDiv) {
-  const img = qrDiv.querySelector("img");
-  const canvas = qrDiv.querySelector("canvas");
-  let dataUrl = img?.src || canvas?.toDataURL("image/png");
-  if (!dataUrl) return;
-  const res = await fetch(dataUrl);
-  const blob = await res.blob();
-  const file = new File([blob], "alm-qr.png", { type: "image/png" });
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    await navigator.share({ files: [file], title: "ALM QR" });
-  } else {
-    alert("المشاركة غير مدعومة.");
+  
+  const total = finalChunks.length;
+  document.getElementById("qrList").innerHTML = "";
+  document.getElementById("encodingStatus").innerHTML = `✅ تم التقسيم إلى ${total} باركود (كل جزء ~${Math.round(text.length/total)} حرف)`;
+  
+  // 3. توليد الباركودات النهائية
+  for (let i = 0; i < total; i++) {
+    const codes = encodeChunkToCodes(finalChunks[i], key);
+    const compressed = LZString.compressToEncodedURIComponent(codes);
+    const payload = `part=${i+1}/${total}|${compressed}`;
+    const qrItem = createQRItem(payload, i+1, total);
+    document.getElementById("qrList").appendChild(qrItem);
   }
 }
 
@@ -381,7 +457,6 @@ async function decodeSingleQR() {
 
 /* ============================================================
    فك عدة باركودات ودمجها (مع إمكانية فقدان بعض الأجزاء)
-   يتم استخراج النص من كل جزء موجود، ووضع علامة للمفقود
 ============================================================ */
 async function decodeMultipleQR() {
   const files = document.getElementById("qrFiles").files;
