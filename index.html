@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<title>ALM Multi‑QR Encoder (نسخة محسّنة)</title>
+<title>ALM Multi‑QR Encoder - إصدار احترافي (فك جزئي)</title>
 
 <style>
 body {
@@ -45,10 +45,6 @@ button:hover {
   background: #0a8c6c;
 }
 
-button:active {
-  transform: scale(0.98);
-}
-
 textarea, input[type="number"], input[type="file"] {
   width: 100%;
   padding: 12px;
@@ -66,14 +62,6 @@ textarea, input[type="number"], input[type="file"] {
   border-radius: 12px;
   text-align: center;
   background: #fafafa;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-}
-
-.small {
-  font-size: 13px;
-  color: #666;
-  margin-top: 5px;
-  text-align: center;
 }
 
 .status {
@@ -85,71 +73,58 @@ textarea, input[type="number"], input[type="file"] {
   text-align: center;
 }
 
-#qrList {
-  margin-top: 20px;
-}
-
-hr {
-  margin: 25px 0;
+#finalOutput {
+  padding: 10px;
+  white-space: pre-wrap;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  min-height: 80px;
+  background: #fefefe;
 }
 </style>
 
-<!-- QRCode -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-
-<!-- LZ-String -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
-
-<!-- PDF.js -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
-
-<!-- Html5Qrcode -->
 <script src="https://unpkg.com/html5-qrcode"></script>
 
 </head>
 
 <body>
 
-<header>ALM Multi‑QR Encoder (إصدار احترافي)</header>
+<header>ALM Multi‑QR Encoder (فك جزئي + تقليل الأجزاء)</header>
 
 <div class="container">
 
 <h3>إدخال نص أو كتاب</h3>
-
-<textarea id="inputText" rows="5" placeholder="اكتب نصًا هنا (للنصوص القصيرة فقط)..."></textarea>
-
+<textarea id="inputText" rows="5" placeholder="اكتب نصًا هنا..."></textarea>
 <label>أو حمّل كتاب PDF:</label>
 <input type="file" id="pdfInput" accept="application/pdf">
-
 <label>مفتاح المستخدم:</label>
 <input id="userKey" type="number" value="123456789">
 
 <button onclick="startEncoding()">تحويل إلى باركودات متعددة</button>
 <div id="encodingStatus" class="status"></div>
-
 <div id="qrList"></div>
 
 <hr>
 
 <h3>فكّ الباركودات</h3>
-
 <label>اختر صورة أو عدة صور QR:</label>
 <input type="file" id="qrFiles" accept="image/*" multiple>
-
 <button onclick="decodeSingleQR()">استخراج نص من صورة واحدة</button>
 <button onclick="decodeMultipleQR()">فكّ جميع الباركودات ودمجها</button>
 
-<h4>النص النهائي / النص المستخرج:</h4>
-<div id="finalOutput" style="padding:10px; white-space:pre-wrap; border:1px solid #ccc; border-radius:8px; min-height:80px; background:#fefefe;"></div>
+<h4>النص النهائي / المستخرج:</h4>
+<div id="finalOutput"></div>
 
-<!-- مخفي لقارئ Html5Qrcode -->
 <div id="singleReader" style="display:none;"></div>
 
 </div>
 
 <script>
 /* ============================================================
-   نواة ALM - محسن مع ضغط كامل وتقسيم ذكي
+   نواة ALM (كما هي)
 ============================================================ */
 const B = 32;
 const LMAX = 12;
@@ -160,8 +135,7 @@ const indexToChar = {
   0:"",1:"ا",2:"ب",3:"ت",4:"ث",5:"ج",6:"ح",7:"خ",
   8:"د",9:"ذ",10:"ر",11:"ز",12:"س",13:"ش",14:"ص",
   15:"ض",16:"ط",17:"ظ",18:"ع",19:"غ",20:"ف",21:"ق",
-  22:"ك",23:"ل",24:"م",25:"ن",26:"ه",27:"و",28:"ي",
-  29:"ء"
+  22:"ك",23:"ل",24:"م",25:"ن",26:"ه",27:"و",28:"ي", 29:"ء"
 };
 
 const charToIndex = {};
@@ -180,12 +154,10 @@ function normalizeArabic(s) {
 }
 
 function bigIntToBase36(n) { return n.toString(36); }
-
 function base36ToBigInt(str) {
   let res = 0n;
   for (let i = 0; i < str.length; i++) {
-    const v = BigInt(parseInt(str[i], 36));
-    res = res * 36n + v;
+    res = res * 36n + BigInt(parseInt(str[i], 36));
   }
   return res;
 }
@@ -203,8 +175,7 @@ function wordToCode(word){
   let pos = 0;
   for (let i = word.length - 1; i >= 0; i--){
     const idx = charToIndex[word[i]];
-    if (idx === undefined) continue;
-    c[pos++] = idx;
+    if (idx !== undefined) c[pos++] = idx;
   }
   let C = 0n;
   for (let i = 0; i < LMAX; i++){
@@ -228,57 +199,76 @@ function codeToWord(Cbig){
 }
 
 /* ============================================================
-   استخراج نص PDF
+   تحويل جزء نصي (chunk) إلى سلسلة رموز base36 (مشفرة)
 ============================================================ */
-async function extractPDFText(file) {
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  let fullText = "";
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
-    const strings = content.items.map(item => item.str).join(" ");
-    fullText += strings + " ";
-  }
-  return normalizeArabic(fullText);
-}
-
-/* ============================================================
-   تحويل النص الكامل إلى سلسلة من رموز base36 (مفصولة بفواصل)
-============================================================ */
-function encodeFullTextToCodes(text, key) {
-  const words = text.split(/\s+/);
-  const codesList = [];
-  for (let word of words) {
-    const blocks = splitWord(word);
-    for (let block of blocks) {
-      const C = wordToCode(block);
+function encodeChunkToCodes(chunkText, key) {
+  const words = chunkText.split(/\s+/);
+  const codes = [];
+  for (let w of words) {
+    const blocks = splitWord(w);
+    for (let blk of blocks) {
+      const C = wordToCode(blk);
       const C2 = C ^ key;
       const fFull = f0 + C2 * df;
-      codesList.push(bigIntToBase36(fFull));
+      codes.push(bigIntToBase36(fFull));
     }
   }
-  return codesList.join(",");
+  return codes.join(",");
 }
 
 /* ============================================================
-   فك سلسلة الرموز إلى نص عربي
+   فك سلسلة الرموز إلى نص
 ============================================================ */
-function decodeChunkToText(rawCodes, key) {
-  const freqs36 = rawCodes.split(",");
-  const words = [];
-  for (let f36 of freqs36) {
+function decodeCodesToText(codesStr, key) {
+  if (!codesStr) return "";
+  const freqs = codesStr.split(",");
+  let result = [];
+  for (let f36 of freqs) {
     if (!f36) continue;
     const fFull = base36ToBigInt(f36);
     const C2 = (fFull - f0) / df;
     const C = C2 ^ key;
-    words.push(codeToWord(C));
+    result.push(codeToWord(C));
   }
-  return words.join(" ");
+  return result.join(" ");
 }
 
 /* ============================================================
-   الترميز إلى عدة باركودات (ضغط كامل ثم تقسيم ذكي)
+   استخراج نص من PDF
+============================================================ */
+async function extractPDFText(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let full = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    full += content.items.map(item => item.str).join(" ") + " ";
+  }
+  return normalizeArabic(full);
+}
+
+/* ============================================================
+   تقسيم النص الطويل إلى أجزاء (كل جزء 3000 حرف عربي تقريباً)
+   هذا يقلل عدد الباركودات بشكل كبير
+============================================================ */
+function splitTextIntoChunks(text, maxChars = 3000) {
+  const chunks = [];
+  let remaining = text;
+  while (remaining.length > maxChars) {
+    let splitPos = maxChars;
+    // نحاول القص عند مسافة
+    while (splitPos > 0 && remaining[splitPos] !== ' ') splitPos--;
+    if (splitPos === 0) splitPos = maxChars; // قص قسري
+    chunks.push(remaining.slice(0, splitPos).trim());
+    remaining = remaining.slice(splitPos).trim();
+  }
+  if (remaining.length > 0) chunks.push(remaining);
+  return chunks;
+}
+
+/* ============================================================
+   الترميز إلى عدة باركودات (كل جزء مستقل)
 ============================================================ */
 async function startEncoding() {
   const key = BigInt(document.getElementById("userKey").value || "0");
@@ -289,35 +279,27 @@ async function startEncoding() {
     document.getElementById("encodingStatus").innerHTML = "⏳ جاري استخراج النص من PDF...";
     text = await extractPDFText(pdfFile);
   }
-
+  
   if (!text) {
-    alert("لا يوجد نص للترميز.");
+    alert("لا يوجد نص.");
     document.getElementById("encodingStatus").innerHTML = "";
     return;
   }
-
-  document.getElementById("encodingStatus").innerHTML = "⏳ جاري تحويل النص إلى رموز...";
   
-  // 1. تحويل النص الكامل إلى رموز base36
-  const fullCodes = encodeFullTextToCodes(text, key);
-  
-  // 2. ضغط الناتج (LZString)
-  const compressed = LZString.compressToEncodedURIComponent(fullCodes);
-  
-  // 3. تقسيم النص المضغوط إلى أجزاء مناسبة للـ QR (أقصى طول 1800 حرف، لأن QR code يدعم ~2950 حرف رقمي، لكننا نستخدم أحرف URI)
-  const MAX_CHUNK_SIZE = 1800; // قيمة آمنة لجميع أجهزة QR
-  const parts = [];
-  for (let i = 0; i < compressed.length; i += MAX_CHUNK_SIZE) {
-    parts.push(compressed.slice(i, i + MAX_CHUNK_SIZE));
-  }
-  const total = parts.length;
+  // تقسيم النص إلى أجزاء كبيرة (3000 حرف)
+  const rawChunks = splitTextIntoChunks(text, 3000);
+  const total = rawChunks.length;
   
   document.getElementById("qrList").innerHTML = "";
-  document.getElementById("encodingStatus").innerHTML = `✨ تم التقسيم إلى ${total} باركود (ضغط بنسبة ${Math.round((1 - compressed.length / fullCodes.length)*100)}%، حجم مضغوط ${compressed.length} حرف)`;
+  document.getElementById("encodingStatus").innerHTML = `📦 تم تقسيم النص إلى ${total} جزء كبير (كل جزء ~3000 حرف)`;
   
   for (let i = 0; i < total; i++) {
+    // ترميز الجزء إلى رموز base36
+    const codes = encodeChunkToCodes(rawChunks[i], key);
+    // ضغط الرموز باستخدام LZString لزيادة السعة
+    const compressed = LZString.compressToEncodedURIComponent(codes);
     const header = `part=${i+1}/${total}|`;
-    const finalData = header + parts[i];
+    const finalData = header + compressed;
     
     const box = document.createElement("div");
     box.className = "qr-box";
@@ -325,12 +307,11 @@ async function startEncoding() {
     const qrDiv = document.createElement("div");
     box.appendChild(qrDiv);
     
-    // استخدام مستوى تصحيح خطأ L لأقصى سعة
     new QRCode(qrDiv, {
       text: finalData,
       width: 240,
       height: 240,
-      correctLevel: QRCode.CorrectLevel.L
+      correctLevel: QRCode.CorrectLevel.L   // أقصى سعة
     });
     
     const saveBtn = document.createElement("button");
@@ -347,15 +328,10 @@ async function startEncoding() {
   }
 }
 
-/* ============================================================
-   حفظ ومشاركة QR (دون تغيير)
-============================================================ */
 function saveSpecificQR(qrDiv) {
   const img = qrDiv.querySelector("img");
   const canvas = qrDiv.querySelector("canvas");
-  let dataUrl = null;
-  if (img && img.src) dataUrl = img.src;
-  else if (canvas) dataUrl = canvas.toDataURL("image/png");
+  let dataUrl = img?.src || canvas?.toDataURL("image/png");
   if (!dataUrl) return;
   const a = document.createElement("a");
   a.href = dataUrl;
@@ -366,59 +342,52 @@ function saveSpecificQR(qrDiv) {
 async function shareSpecificQR(qrDiv) {
   const img = qrDiv.querySelector("img");
   const canvas = qrDiv.querySelector("canvas");
-  let dataUrl = null;
-  if (img && img.src) dataUrl = img.src;
-  else if (canvas) dataUrl = canvas.toDataURL("image/png");
+  let dataUrl = img?.src || canvas?.toDataURL("image/png");
   if (!dataUrl) return;
   const res = await fetch(dataUrl);
   const blob = await res.blob();
   const file = new File([blob], "alm-qr.png", { type: "image/png" });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    await navigator.share({ files: [file], title: "ALM QR", text: "باركود من كتاب ALM" });
+    await navigator.share({ files: [file], title: "ALM QR" });
   } else {
-    alert("المشاركة غير مدعومة على هذا الجهاز.");
+    alert("المشاركة غير مدعومة.");
   }
 }
 
 /* ============================================================
-   فك باركود واحد فقط (لصورة واحدة)
+   فك باركود واحد فقط
 ============================================================ */
 async function decodeSingleQR() {
   const files = document.getElementById("qrFiles").files;
-  if (!files.length) {
-    alert("اختر صورة QR أولاً.");
-    return;
-  }
+  if (!files.length) { alert("اختر صورة QR أولاً."); return; }
   const file = files[0];
   const reader = new Html5Qrcode("singleReader");
   try {
     const result = await reader.scanFile(file, true);
-    // نستخرج البيانات بعد الـ header
-    const partsData = result.split("|");
-    if (partsData.length < 2) throw new Error("تنسيق غير صالح");
-    const compressedData = partsData.slice(1).join("|"); // في حال وجود أكثر من |
-    const decompressed = LZString.decompressFromEncodedURIComponent(compressedData);
+    const parts = result.split("|");
+    if (parts.length < 2) throw new Error("تنسيق غير صالح");
+    const compressedData = parts.slice(1).join("|");
+    const codes = LZString.decompressFromEncodedURIComponent(compressedData);
+    if (!codes) throw new Error("فشل فك الضغط");
     const key = BigInt(document.getElementById("userKey").value || "0");
-    const decodedText = decodeChunkToText(decompressed, key);
+    const finalText = decodeCodesToText(codes, key);
     document.getElementById("finalOutput").textContent = 
-      "📄 (من باركود واحد فقط)\n" + decodedText;
+      "📄 (من باركود واحد فقط)\n" + finalText;
   } catch(e) {
-    alert("فشل في قراءة الباركود: " + e.message);
+    alert("فشل القراءة: " + e.message);
   }
   reader.clear();
 }
 
 /* ============================================================
-   فك عدة باركودات ودمجها (مع إعادة بناء النص المضغوط الكامل)
+   فك عدة باركودات ودمجها (مع إمكانية فقدان بعض الأجزاء)
+   يتم استخراج النص من كل جزء موجود، ووضع علامة للمفقود
 ============================================================ */
 async function decodeMultipleQR() {
   const files = document.getElementById("qrFiles").files;
-  if (!files.length) {
-    alert("اختر صور QR أولاً.");
-    return;
-  }
+  if (!files.length) { alert("اختر صور QR أولاً."); return; }
   
-  const partsMap = new Map(); // رقم الجزء -> البيانات المضغوطة (بدون header)
+  const parts = new Map(); // رقم الجزء -> النص المفكوك (العربي)
   let totalParts = 0;
   const reader = new Html5Qrcode("singleReader");
   
@@ -428,47 +397,39 @@ async function decodeMultipleQR() {
       const firstPipe = result.indexOf("|");
       if (firstPipe === -1) continue;
       const header = result.substring(0, firstPipe);
-      const data = result.substring(firstPipe + 1);
+      const compressedData = result.substring(firstPipe + 1);
       const match = header.match(/part=(\d+)\/(\d+)/);
       if (match) {
         const partNum = parseInt(match[1]);
         totalParts = parseInt(match[2]);
-        partsMap.set(partNum, data);
+        const codes = LZString.decompressFromEncodedURIComponent(compressedData);
+        if (codes) {
+          const key = BigInt(document.getElementById("userKey").value || "0");
+          const text = decodeCodesToText(codes, key);
+          parts.set(partNum, text);
+        }
       }
-    } catch(e) { /* تجاهل الصور غير الصالحة */ }
+    } catch(e) { /* تجاهل الملفات غير الصالحة */ }
   }
   
   reader.clear();
   
-  if (totalParts === 0 || partsMap.size === 0) {
-    alert("لم يتم العثور على باركودات صالحة.");
+  if (totalParts === 0 || parts.size === 0) {
+    alert("لم يتم العثور على أي باركود صالح.");
     return;
   }
   
-  // إعادة بناء النص المضغوط الكامل بالترتيب
-  let fullCompressed = "";
+  // إعادة بناء النص الكامل حسب الترتيب
+  let fullText = "";
   for (let i = 1; i <= totalParts; i++) {
-    if (partsMap.has(i)) {
-      fullCompressed += partsMap.get(i);
+    if (parts.has(i)) {
+      fullText += parts.get(i) + " ";
     } else {
-      fullCompressed += ""; // في حالة فقد جزء، يمكن إضافة علامة
+      fullText += "[... الجزء " + i + " مفقود ...] ";
     }
   }
   
-  if (fullCompressed.length === 0) {
-    alert("البيانات غير مكتملة أو تالفة.");
-    return;
-  }
-  
-  const decompressed = LZString.decompressFromEncodedURIComponent(fullCompressed);
-  if (!decompressed) {
-    alert("فشل فك الضغط. تأكد من أن جميع الأجزاء سليمة.");
-    return;
-  }
-  
-  const key = BigInt(document.getElementById("userKey").value || "0");
-  const finalText = decodeChunkToText(decompressed, key);
-  document.getElementById("finalOutput").textContent = finalText;
+  document.getElementById("finalOutput").textContent = fullText.trim();
 }
 </script>
 
