@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>ALM Multi‑QR Encoder - الوضع الفائق (باركود واحد لجميع الأجزاء)</title>
+
+<style>
+body {
+  font-family: "Cairo", sans-serif;
+  background: #ffffff;
+  color: #222;
+  margin: 0;
+  padding: 0;
+}
+
+header {
+  background: #0BA37F;
+  color: white;
+  padding: 15px;
+  text-align: center;
+  font-size: 22px;
+  font-weight: bold;
+}
+
+.container {
+  padding: 20px;
+  max-width: 700px;
+  margin: auto;
+}
+
+button {
+  width: 100%;
+  padding: 14px;
+  margin-top: 10px;
+  background: #0BA37F;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 17px;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+button:hover {
+  background: #0a8c6c;
+}
+
+textarea, input[type="number"], input[type="file"] {
+  width: 100%;
+  padding: 12px;
+  margin-top: 10px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 16px;
+  box-sizing: border-box;
+}
+
+.qr-box {
+  margin: 20px 0;
+  padding: 15px;
+  border: 1px solid #ddd;
+  border-radius: 12px;
+  text-align: center;
+  background: #fafafa;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+}
+
+.status {
+  background: #f0f0f0;
+  padding: 8px;
+  border-radius: 8px;
+  font-size: 14px;
+  margin: 10px 0;
+  text-align: center;
+}
+
+#finalOutput {
+  padding: 10px;
+  white-space: pre-wrap;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  min-height: 80px;
+  background: #fefefe;
+}
+
+.qr-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.qr-buttons button {
+  flex: 1;
+  margin-top: 0;
+  padding: 10px;
+  font-size: 15px;
+}
+</style>
+
+<!-- QRCode -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<!-- LZ-String -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
+<!-- PDF.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+<!-- Html5Qrcode -->
+<script src="https://unpkg.com/html5-qrcode"></script>
+<!-- Mammoth.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.4.2/mammoth.browser.min.js"></script>
+
+</head>
+
+<body>
+
+<header>ALM Multi‑QR Encoder (يدعم الباركود الفائق)</header>
+
+<div class="container">
+
+<h3>إدخال نص أو كتاب</h3>
+<textarea id="inputText" rows="5" placeholder="اكتب نصًا هنا..."></textarea>
+
+<label>أو حمّل كتاب PDF:</label>
+<input type="file" id="pdfInput" accept="application/pdf">
+
+<label>أو حمّل مستند Word (.docx):</label>
+<input type="file" id="wordInput" accept=".docx">
+
+<label>مفتاح المستخدم:</label>
+<input id="userKey" type="number" value="123456789">
+
+<button onclick="startEncoding()">تحويل إلى باركودات متعددة</button>
+<div id="encodingStatus" class="status"></div>
+<div id="qrList"></div>
+
+<button id="mergeBtn" onclick="mergeToSuperQR()" style="background:#2c7da0;" disabled>✨ دمج جميع الأجزاء في باركود واحد (إذا أمكن)</button>
+<div id="superQrContainer" class="qr-box" style="display:none;"></div>
+
+<hr>
+
+<h3>فكّ الباركودات</h3>
+<label>اختر صورة أو عدة صور QR:</label>
+<input type="file" id="qrFiles" accept="image/*" multiple>
+<button onclick="decodeSingleQR()">استخراج نص من صورة واحدة</button>
+<button onclick="decodeMultipleQR()">فكّ جميع الباركودات ودمجها</button>
+<button onclick="decodeSuperQR()">🔷 فك باركود فائق (باركود واحد يحتوي كل الأجزاء)</button>
+
+<h4>النص النهائي / المستخرج:</h4>
+<div id="finalOutput"></div>
+
+<div id="singleReader" style="display:none;"></div>
+
+</div>
+
+<script>
+/* ============================================================
+   نواة ALM (نفس السابق)
+============================================================ */
+const B = 32;
+const LMAX = 12;
+const f0 = 100000n;
+const df = 1n;
+
+const indexToChar = {
+  0:"",1:"ا",2:"ب",3:"ت",4:"ث",5:"ج",6:"ح",7:"خ",
+  8:"د",9:"ذ",10:"ر",11:"ز",12:"س",13:"ش",14:"ص",
+  15:"ض",16:"ط",17:"ظ",18:"ع",19:"غ",20:"ف",21:"ق",
+  22:"ك",23:"ل",24:"م",25:"ن",26:"ه",27:"و",28:"ي",29:"ء"
+};
+
+const charToIndex = {};
+for (const [i,ch] of Object.entries(indexToChar)) {
+  if (ch) charToIndex[ch] = parseInt(i, 10);
+}
+
+function normalizeArabic(s) {
+  return (s || "")
+    .replace(/[إأآ]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/ؤ/g, "و")
+    .replace(/ئ/g, "ي")
+    .replace(/ة/g, "ه")
+    .replace(/[^ءاأإآبتثجحخدذرزسشصضطظعغفقكلمنهوي\s]/g, "");
+}
+
+function bigIntToBase36(n) { return n.toString(36); }
+function base36ToBigInt(str) {
+  let res = 0n;
+  for (let i = 0; i < str.length; i++) {
+    res = res * 36n + BigInt(parseInt(str[i], 36));
+  }
+  return res;
+}
+
+function splitWord(word) {
+  const blocks = [];
+  for (let i = 0; i < word.length; i += LMAX) {
+    blocks.push(word.slice(i, i + LMAX));
+  }
+  return blocks;
+}
+
+function wordToCode(word){
+  const c = new Array(LMAX).fill(0);
+  let pos = 0;
+  for (let i = word.length - 1; i >= 0; i--){
+    const idx = charToIndex[word[i]];
+    if (idx !== undefined) c[pos++] = idx;
+  }
+  let C = 0n;
+  for (let i = 0; i < LMAX; i++){
+    C += BigInt(c[i]) * (BigInt(B) ** BigInt(i));
+  }
+  return C;
+}
+
+function codeToWord(Cbig){
+  let C = BigInt(Cbig);
+  const digits = [];
+  for (let i = 0; i < LMAX; i++){
+    digits.push(Number(C % BigInt(B)));
+    C /= BigInt(B);
+  }
+  let w = "";
+  for (let i = LMAX - 1; i >= 0; i--){
+    w += indexToChar[digits[i]] || "";
+  }
+  return w;
+}
+
+function encodeChunkToCodes(chunkText, key) {
+  const words = chunkText.split(/\s+/);
+  const codes = [];
+  for (let w of words) {
+    const blocks = splitWord(w);
+    for (let blk of blocks) {
+      const C = wordToCode(blk);
+      const C2 = C ^ key;
+      const fFull = f0 + C2 * df;
+      codes.push(bigIntToBase36(fFull));
+    }
+  }
+  return codes.join(",");
+}
+
+function decodeCodesToText(codesStr, key) {
+  if (!codesStr) return "";
+  const freqs = codesStr.split(",");
+  let result = [];
+  for (let f36 of freqs) {
+    if (!f36) continue;
+    const fFull = base36ToBigInt(f36);
+    const C2 = (fFull - f0) / df;
+    const C = C2 ^ key;
+    result.push(codeToWord(C));
+  }
+  return result.join(" ");
+}
+
+/* استخراج النص من PDF و Word */
+async function extractPDFText(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let full = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    full += content.items.map(item => item.str).join(" ") + " ";
+  }
+  return normalizeArabic(full);
+}
+
+async function extractWordText(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
+  return normalizeArabic(result.value);
+}
+
+function splitTextIntoChunks(text, maxChars = 2500) {
+  const chunks = [];
+  let remaining = text;
+  while (remaining.length > maxChars) {
+    let splitPos = maxChars;
+    while (splitPos > 0 && remaining[splitPos] !== ' ') splitPos--;
+    if (splitPos === 0) splitPos = maxChars;
+    chunks.push(remaining.slice(0, splitPos).trim());
+    remaining = remaining.slice(splitPos).trim();
+  }
+  if (remaining.length > 0) chunks.push(remaining);
+  return chunks;
+}
+
+function canGenerateQR(text) {
+  const temp = document.createElement("div");
+  try {
+    new QRCode(temp, { text: text, width: 1, height: 1, correctLevel: QRCode.CorrectLevel.L });
+    return true;
+  } catch(e) { return false; }
+}
+
+function createQRItem(payload, partNumber, totalParts) {
+  const box = document.createElement("div");
+  box.className = "qr-box";
+  box.innerHTML = `<h4>الجزء ${partNumber} من ${totalParts}</h4>`;
+  const qrDiv = document.createElement("div");
+  box.appendChild(qrDiv);
+  new QRCode(qrDiv, { text: payload, width: 240, height: 240, correctLevel: QRCode.CorrectLevel.L });
+  const btnContainer = document.createElement("div");
+  btnContainer.className = "qr-buttons";
+  const saveBtn = document.createElement("button");
+  saveBtn.textContent = "💾 حفظ الباركود";
+  saveBtn.onclick = () => saveQRFromDiv(qrDiv);
+  const shareBtn = document.createElement("button");
+  shareBtn.textContent = "📤 مشاركة الباركود";
+  shareBtn.onclick = () => shareQRFromDiv(qrDiv);
+  btnContainer.appendChild(saveBtn);
+  btnContainer.appendChild(shareBtn);
+  box.appendChild(btnContainer);
+  return box;
+}
+
+function saveQRFromDiv(qrDiv) {
+  const img = qrDiv.querySelector("img");
+  const canvas = qrDiv.querySelector("canvas");
+  let dataUrl = img?.src || canvas?.toDataURL("image/png");
+  if (!dataUrl) return;
+  const a = document.createElement("a");
+  a.href = dataUrl;
+  a.download = "alm-qr.png";
+  a.click();
+}
+
+async function shareQRFromDiv(qrDiv) {
+  const img = qrDiv.querySelector("img");
+  const canvas = qrDiv.querySelector("canvas");
+  let dataUrl = img?.src || canvas?.toDataURL("image/png");
+  if (!dataUrl) return;
+  const res = await fetch(dataUrl);
+  const blob = await res.blob();
+  const file = new File([blob], "alm-qr.png", { type: "image/png" });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    await navigator.share({ files: [file], title: "ALM QR" });
+  } else { alert("المشاركة غير مدعومة."); }
+}
+
+/* ------------------------------------------------------------
+   المتغيرات العامة لحفظ الأجزاء المؤقتة للدمج
+------------------------------------------------------------ */
+let lastGeneratedChunks = [];  // مصفوفة تحتوي على كل النص المضغوط (بدون header) لكل جزء
+let lastTotalParts = 0;
+
+/* الترميز العادي (ينتج باركودات متعددة) */
+async function startEncoding() {
+  const key = BigInt(document.getElementById("userKey").value || "0");
+  let text = document.getElementById("inputText").value.trim();
+  const pdfFile = document.getElementById("pdfInput").files[0];
+  const wordFile = document.getElementById("wordInput").files[0];
+  
+  if (!text && pdfFile) {
+    document.getElementById("encodingStatus").innerHTML = "⏳ جاري استخراج النص من PDF...";
+    text = await extractPDFText(pdfFile);
+  } else if (!text && wordFile) {
+    document.getElementById("encodingStatus").innerHTML = "⏳ جاري استخراج النص من Word...";
+    text = await extractWordText(wordFile);
+  }
+  if (!text) { alert("لا يوجد نص."); return; }
+  
+  let rawChunks = splitTextIntoChunks(text, 2500);
+  let finalChunks = [];
+  for (let chunk of rawChunks) {
+    let success = false;
+    let currentChunk = chunk;
+    let attempts = 0;
+    while (!success && attempts < 5) {
+      const codes = encodeChunkToCodes(currentChunk, key);
+      const compressed = LZString.compressToEncodedURIComponent(codes);
+      const testPayload = `part=1/1|${compressed}`;
+      if (testPayload.length <= 1800 && canGenerateQR(testPayload)) {
+        finalChunks.push(currentChunk);
+        success = true;
+      } else {
+        const words = currentChunk.split(/\s+/);
+        if (words.length <= 1) break;
+        currentChunk = words.slice(0, Math.floor(words.length/2)).join(" ");
+        attempts++;
+      }
+    }
+    if (!success) { alert("تعذر ترميز جزء كبير."); return; }
+  }
+  
+  const total = finalChunks.length;
+  document.getElementById("qrList").innerHTML = "";
+  lastGeneratedChunks = [];
+  for (let i = 0; i < total; i++) {
+    const codes = encodeChunkToCodes(finalChunks[i], key);
+    const compressed = LZString.compressToEncodedURIComponent(codes);
+    const payload = `part=${i+1}/${total}|${compressed}`;
+    lastGeneratedChunks.push(compressed);
+    const qrItem = createQRItem(payload, i+1, total);
+    document.getElementById("qrList").appendChild(qrItem);
+  }
+  lastTotalParts = total;
+  document.getElementById("encodingStatus").innerHTML = `✅ تم التقسيم إلى ${total} باركود.`;
+  
+  // تفعيل زر الدمج إذا كان ممكناً
+  const mergeBtn = document.getElementById("mergeBtn");
+  mergeBtn.disabled = false;
+  document.getElementById("superQrContainer").style.display = "none";
+}
+
+/* دمج جميع الأجزاء في باركود واحد (super QR) */
+function mergeToSuperQR() {
+  if (lastGeneratedChunks.length === 0) {
+    alert("لا توجد أجزاء مسبقة. قم بتحويل النص أولاً.");
+    return;
+  }
+  // دمج جميع الأجزاء (المضغوطة) في مصفوفة JSON ثم ضغطها
+  const superData = JSON.stringify({
+    total: lastTotalParts,
+    chunks: lastGeneratedChunks
+  });
+  const compressedSuper = LZString.compressToEncodedURIComponent(superData);
+  const finalPayload = `super|${compressedSuper}`;
+  
+  if (finalPayload.length > 2800) {
+    alert(`⚠️ البيانات كبيرة جداً (${finalPayload.length} حرف) ولا يمكن وضعها في باركود واحد. الحد الأقصى ~2800 حرف. استخدم الباركودات المتعددة.`);
+    return;
+  }
+  if (!canGenerateQR(finalPayload)) {
+    alert("تعذر توليد باركود فائق بسبب طول البيانات أو تعقيدها.");
+    return;
+  }
+  
+  const container = document.getElementById("superQrContainer");
+  container.innerHTML = "<h4>✨ الباركود الفائق (يحتوي كل الأجزاء)</h4>";
+  const qrDiv = document.createElement("div");
+  container.appendChild(qrDiv);
+  new QRCode(qrDiv, { text: finalPayload, width: 260, height: 260, correctLevel: QRCode.CorrectLevel.L });
+  
+  const saveBtn = document.createElement("button");
+  saveBtn.textContent = "💾 حفظ الباركود الفائق";
+  saveBtn.onclick = () => saveQRFromDiv(qrDiv);
+  const shareBtn = document.createElement("button");
+  shareBtn.textContent = "📤 مشاركة الباركود الفائق";
+  shareBtn.onclick = () => shareQRFromDiv(qrDiv);
+  const btnDiv = document.createElement("div");
+  btnDiv.className = "qr-buttons";
+  btnDiv.appendChild(saveBtn);
+  btnDiv.appendChild(shareBtn);
+  container.appendChild(btnDiv);
+  container.style.display = "block";
+}
+
+/* فك الباركود الفائق: استعادة الأجزاء ثم استخراج النص */
+async function decodeSuperQR() {
+  const files = document.getElementById("qrFiles").files;
+  if (!files.length) { alert("اختر صورة الباركود الفائق أولاً."); return; }
+  const file = files[0];
+  const reader = new Html5Qrcode("singleReader");
+  try {
+    const result = await reader.scanFile(file, true);
+    if (!result.startsWith("super|")) {
+      alert("هذا ليس باركوداً فائقاً. استخدم الزر العادي للفك.");
+      return;
+    }
+    const compressedSuper = result.substring(6); // بعد "super|"
+    const superJson = LZString.decompressFromEncodedURIComponent(compressedSuper);
+    if (!superJson) throw new Error("فشل فك ضغط البيانات الفائقة");
+    const { total, chunks } = JSON.parse(superJson);
+    if (!total || !chunks || chunks.length !== total) throw new Error("تنسيق البيانات غير صحيح");
+    
+    const key = BigInt(document.getElementById("userKey").value || "0");
+    let fullText = "";
+    for (let i = 0; i < chunks.length; i++) {
+      const compressedChunk = chunks[i];
+      const codes = LZString.decompressFromEncodedURIComponent(compressedChunk);
+      if (!codes) {
+        fullText += `[فشل فك الجزء ${i+1}] `;
+        continue;
+      }
+      const textPart = decodeCodesToText(codes, key);
+      fullText += textPart + " ";
+    }
+    document.getElementById("finalOutput").textContent = fullText.trim();
+  } catch(e) {
+    alert("فشل في قراءة الباركود الفائق: " + e.message);
+  }
+  reader.clear();
+}
+
+/* فك باركود واحد عادي */
+async function decodeSingleQR() {
+  const files = document.getElementById("qrFiles").files;
+  if (!files.length) { alert("اختر صورة QR أولاً."); return; }
+  const file = files[0];
+  const reader = new Html5Qrcode("singleReader");
+  try {
+    const result = await reader.scanFile(file, true);
+    const parts = result.split("|");
+    if (parts.length < 2) throw new Error("تنسيق غير صالح");
+    const compressedData = parts.slice(1).join("|");
+    const codes = LZString.decompressFromEncodedURIComponent(compressedData);
+    if (!codes) throw new Error("فشل فك الضغط");
+    const key = BigInt(document.getElementById("userKey").value || "0");
+    const finalText = decodeCodesToText(codes, key);
+    document.getElementById("finalOutput").textContent = "📄 (من باركود واحد فقط)\n" + finalText;
+  } catch(e) { alert("فشل القراءة: " + e.message); }
+  reader.clear();
+}
+
+/* فك عدة باركودات عادية (مع إمكانية الفقد) */
+async function decodeMultipleQR() {
+  const files = document.getElementById("qrFiles").files;
+  if (!files.length) { alert("اختر صور QR أولاً."); return; }
+  const parts = new Map();
+  let maxPartNumber = 0;
+  let globalTotal = 0;
+  const reader = new Html5Qrcode("singleReader");
+  for (let file of files) {
+    try {
+      const result = await reader.scanFile(file, true);
+      const firstPipe = result.indexOf("|");
+      if (firstPipe === -1) continue;
+      const header = result.substring(0, firstPipe);
+      const compressedData = result.substring(firstPipe + 1);
+      const match = header.match(/part=(\d+)\/(\d+)/);
+      if (match) {
+        const partNum = parseInt(match[1]);
+        const totalFromHeader = parseInt(match[2]);
+        globalTotal = Math.max(globalTotal, totalFromHeader);
+        maxPartNumber = Math.max(maxPartNumber, partNum);
+        const codes = LZString.decompressFromEncodedURIComponent(compressedData);
+        if (codes) {
+          const key = BigInt(document.getElementById("userKey").value || "0");
+          const text = decodeCodesToText(codes, key);
+          parts.set(partNum, text);
+        }
+      }
+    } catch(e) {}
+  }
+  reader.clear();
+  if (parts.size === 0) { alert("لم يتم العثور على باركودات صالحة."); return; }
+  const totalParts = globalTotal > 0 ? globalTotal : maxPartNumber;
+  let fullText = "";
+  for (let i = 1; i <= totalParts; i++) {
+    fullText += parts.has(i) ? parts.get(i) + " " : `[... الجزء ${i} مفقود ...] `;
+  }
+  document.getElementById("finalOutput").textContent = fullText.trim();
+}
+</script>
+
+</body>
+</html>
