@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<title>ALM Multi‑QR Encoder - إصدار شامل (Word/PDF/نص)</title>
+<title>ALM Multi‑QR Encoder - نسخة مستقرة (Word/PDF/نص)</title>
 
 <style>
 body {
@@ -112,7 +112,7 @@ textarea, input[type="number"], input[type="file"] {
 
 <body>
 
-<header>ALM Multi‑QR Encoder (نص، PDF، Word)</header>
+<header>ALM Multi‑QR Encoder (يدعم Word, PDF, نص)</header>
 
 <div class="container">
 
@@ -256,7 +256,7 @@ function decodeCodesToText(codesStr, key) {
 }
 
 /* ============================================================
-   استخراج النص من PDF
+   استخراج النص من PDF و Word
 ============================================================ */
 async function extractPDFText(file) {
   const arrayBuffer = await file.arrayBuffer();
@@ -270,9 +270,6 @@ async function extractPDFText(file) {
   return normalizeArabic(full);
 }
 
-/* ============================================================
-   استخراج النص من Word (.docx) باستخدام Mammoth
-============================================================ */
 async function extractWordText(file) {
   const arrayBuffer = await file.arrayBuffer();
   const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
@@ -280,9 +277,9 @@ async function extractWordText(file) {
 }
 
 /* ============================================================
-   تقسيم النص الطويل إلى أجزاء كبيرة
+   تقسيم النص الطويل إلى أجزاء كبيرة (بحد أقصى 2500 حرف لضمان القراءة)
 ============================================================ */
-function splitTextIntoChunks(text, maxChars = 3000) {
+function splitTextIntoChunks(text, maxChars = 2500) {
   const chunks = [];
   let remaining = text;
   while (remaining.length > maxChars) {
@@ -385,7 +382,6 @@ async function startEncoding() {
   const pdfFile = document.getElementById("pdfInput").files[0];
   const wordFile = document.getElementById("wordInput").files[0];
   
-  // تحديد أولوية: النص المباشر > PDF > Word
   if (!text && pdfFile) {
     document.getElementById("encodingStatus").innerHTML = "⏳ جاري استخراج النص من PDF...";
     text = await extractPDFText(pdfFile);
@@ -400,11 +396,10 @@ async function startEncoding() {
     return;
   }
   
-  // 1. تقسيم النص إلى أجزاء كبيرة (3000 حرف)
-  let rawChunks = splitTextIntoChunks(text, 3000);
+  // تقسيم أولي إلى أجزاء بحجم 2500 حرف (أكثر أماناً للقراءة)
+  let rawChunks = splitTextIntoChunks(text, 2500);
   let finalChunks = [];
   
-  // 2. لكل جزء، نحاول ترميزه وضغطه واختبار صلاحية QR
   for (let chunk of rawChunks) {
     let success = false;
     let currentChunk = chunk;
@@ -438,7 +433,6 @@ async function startEncoding() {
   document.getElementById("qrList").innerHTML = "";
   document.getElementById("encodingStatus").innerHTML = `✅ تم التقسيم إلى ${total} باركود (كل جزء ~${Math.round(text.length/total)} حرف)`;
   
-  // 3. توليد الباركودات النهائية
   for (let i = 0; i < total; i++) {
     const codes = encodeChunkToCodes(finalChunks[i], key);
     const compressed = LZString.compressToEncodedURIComponent(codes);
@@ -474,50 +468,66 @@ async function decodeSingleQR() {
 }
 
 /* ============================================================
-   فك عدة باركودات ودمجها (مع إمكانية فقدان بعض الأجزاء)
+   فك عدة باركودات ودمجها (مع إصلاح مشكلة الجزء الأول المفقود)
 ============================================================ */
 async function decodeMultipleQR() {
   const files = document.getElementById("qrFiles").files;
   if (!files.length) { alert("اختر صور QR أولاً."); return; }
   
-  const parts = new Map();
-  let totalParts = 0;
+  const parts = new Map();   // رقم الجزء -> النص المفكوك
+  let maxPartNumber = 0;     // أكبر رقم جزء تمت قراءته
+  let globalTotal = 0;       // العدد الإجمالي للأجزاء (من أي باركود)
   const reader = new Html5Qrcode("singleReader");
   
   for (let file of files) {
     try {
       const result = await reader.scanFile(file, true);
+      console.log("Scanned result:", result);
+      
       const firstPipe = result.indexOf("|");
       if (firstPipe === -1) continue;
       const header = result.substring(0, firstPipe);
       const compressedData = result.substring(firstPipe + 1);
+      console.log("Header:", header);
+      
       const match = header.match(/part=(\d+)\/(\d+)/);
       if (match) {
         const partNum = parseInt(match[1]);
-        totalParts = parseInt(match[2]);
+        const totalFromHeader = parseInt(match[2]);
+        globalTotal = Math.max(globalTotal, totalFromHeader);
+        maxPartNumber = Math.max(maxPartNumber, partNum);
+        
         const codes = LZString.decompressFromEncodedURIComponent(compressedData);
         if (codes) {
           const key = BigInt(document.getElementById("userKey").value || "0");
           const text = decodeCodesToText(codes, key);
           parts.set(partNum, text);
+          console.log(`✅ الجزء ${partNum} تمت قراءته بنجاح`);
+        } else {
+          console.log(`❌ فشل فك ضغط الجزء ${partNum}`);
         }
       }
-    } catch(e) { /* تجاهل الملفات غير الصالحة */ }
+    } catch(e) {
+      console.log("خطأ في قراءة الملف:", e);
+    }
   }
   
   reader.clear();
   
-  if (totalParts === 0 || parts.size === 0) {
+  if (parts.size === 0) {
     alert("لم يتم العثور على أي باركود صالح.");
     return;
   }
+  
+  // العدد الإجمالي: إما من globalTotal أو من أكبر رقم جزء موجود
+  const totalParts = globalTotal > 0 ? globalTotal : maxPartNumber;
   
   let fullText = "";
   for (let i = 1; i <= totalParts; i++) {
     if (parts.has(i)) {
       fullText += parts.get(i) + " ";
     } else {
-      fullText += "[... الجزء " + i + " مفقود ...] ";
+      fullText += `[... الجزء ${i} مفقود ...] `;
     }
   }
   
